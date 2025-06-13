@@ -10,8 +10,12 @@
         } ],
     "require": {
         "php": "^8.4",
+
+        "decodelabs/coercion": "^0.3.3",
         "decodelabs/exceptional": "^0.6.1",
-        "decodelabs/telegraph": "^0.1.1"
+        "decodelabs/telegraph": "^0.2",
+
+        "mailchimp/marketing": "^3.0"
     },
     "require-dev": {
         "decodelabs/phpstan-decodelabs": "^0.7.0"
@@ -30,5 +34,7 @@
         "allow-plugins": {
             "phpstan/extension-installer": true
         }
+    },
+    "repositories": {
     }
 }
