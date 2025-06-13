@@ -9,7 +9,7 @@
 
 ### Mailchimp adapter for Telegraph mailing list manager
 
-Telegraph Mailchimp provides ...
+This package provider a Mailchimp adapter for the Telegraph mailing list manager.
 
 ---
 
@@ -23,7 +23,7 @@ composer require decodelabs/telegraph-mailchimp
 
 ## Usage
 
-Coming soon...
+See the [Telegraph documentation](/decodelabs/telegraph) for general usage instructions.
 
 ## Licensing
 
