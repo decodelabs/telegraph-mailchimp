@@ -95,13 +95,13 @@ class Mailchimp implements Adapter
                 ]);
 
 
-                $categoryResult = $api->getListInterestCategories($source->remoteId, count: 100);
+                $categoryResult = $api->getListInterestCategories($source->remoteId, count: 1000);
                 $groups = [];
 
                 foreach($categoryResult->categories as $category) {
                     $groupResult = $api->listInterestCategoryInterests($source->remoteId, $category->id, [
                         'interests.id', 'interests.name'
-                    ]);
+                    ], count: 1000);
 
                     foreach($groupResult->interests as $group) {
                         $groups[] = new GroupInfo(
