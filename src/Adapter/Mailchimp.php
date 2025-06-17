@@ -13,20 +13,25 @@ use Carbon\CarbonImmutable;
 use DecodeLabs\Coercion;
 use DecodeLabs\Exceptional;
 use DecodeLabs\Exceptional\Exception as ExceptionalException;
+use DecodeLabs\Monarch;
 use DecodeLabs\Nuance\SensitiveProperty;
 use DecodeLabs\Relay\Mailbox;
 use DecodeLabs\Telegraph\Adapter;
+use DecodeLabs\Telegraph\FailureReason;
 use DecodeLabs\Telegraph\Source\EmailType;
 use DecodeLabs\Telegraph\Source\GroupInfo;
 use DecodeLabs\Telegraph\Source\ListInfo;
+use DecodeLabs\Telegraph\Source\ListReference;
 use DecodeLabs\Telegraph\Source\MemberInfo;
 use DecodeLabs\Telegraph\Source\MemberStatus;
 use DecodeLabs\Telegraph\Source\TagInfo;
-use DecodeLabs\Telegraph\SubscriptionRequest;
+use DecodeLabs\Telegraph\MemberDataRequest;
+use DecodeLabs\Telegraph\SourceReference;
 use DecodeLabs\Telegraph\SubscriptionResponse;
 use Exception;
 use GuzzleHttp\Exception\ClientException as HttpClientException;
 use MailchimpMarketing\ApiClient;
+use MailchimpMarketing\Api\ListsApi;
 use Throwable;
 
 class Mailchimp implements Adapter
@@ -49,273 +54,313 @@ class Mailchimp implements Adapter
         $this->apiKey = $apiKey;
     }
 
-    public function fetchListInfo(
-        string $listId
-    ): ?ListInfo {
-        return $this->withApiClient(function(
-            ApiClient $client
-        ) use ($listId): ListInfo {
-            // @phpstan-ignore-next-line
-            $listResult = $client->lists->getList($listId, [
-                'id', 'name', 'date_created', 'stats.member_count', 'subscribe_url_short'
-            ]);
+    public function fetchAllListReferences(): array
+    {
+        return $this->withListsApi(
+            action: function(
+                ListsApi $api
+            ): array {
+                $listResult = $api->getAllLists();
+                $output = [];
 
-
-            // @phpstan-ignore-next-line
-            $categoryResult = $client->lists->getListInterestCategories($listId, count: 100);
-            $groups = [];
-
-            foreach($categoryResult->categories as $category) {
-                // @phpstan-ignore-next-line
-                $groupResult = $client->lists->listInterestCategoryInterests($listId, $category->id, [
-                    'interests.id', 'interests.name'
-                ]);
-
-                foreach($groupResult->interests as $group) {
-                    $groups[] = new GroupInfo(
-                        id: $group->id,
-                        name: $group->name,
-                        categoryId: $category->id,
-                        categoryName: $category->title,
+                foreach($listResult->lists as $list) {
+                    $output[] = new ListReference(
+                        id: $list->id,
+                        name: $list->name,
+                        creationDate: $list->date_created
+                            ? CarbonImmutable::parse($list->date_created)
+                            : null,
+                        subscribeUrl: $list->subscribe_url_short ?? null,
+                        memberCount: $list->stats->member_count ?? null,
                     );
                 }
+
+                return $output;
             }
+        );
+    }
+
+    public function fetchListInfo(
+        SourceReference $source
+    ): ?ListInfo {
+        return $this->withListsApi(
+            source: $source,
+            nullOn404: true,
+            action: function(
+                ListsApi $api
+            ) use ($source): ListInfo {
+                $listResult = $api->getList($source->remoteId, [
+                    'id', 'name', 'date_created', 'stats.member_count', 'subscribe_url_short'
+                ]);
 
 
-            // @phpstan-ignore-next-line
-            $tagResult = $client->lists->tagSearch($listId);
+                $categoryResult = $api->getListInterestCategories($source->remoteId, count: 100);
+                $groups = [];
 
-            return new ListInfo(
-                id: $listResult->id,
-                name: $listResult->name,
-                creationDate: $listResult->date_created
-                    ? CarbonImmutable::parse($listResult->date_created)
-                    : null,
-                subscribeUrl: $listResult->subscribe_url_short ?? null,
-                memberCount: $listResult->stats->member_count ?? null,
-                groups: $groups,
-                tags: array_map(
-                    fn($tag) => new TagInfo((string)$tag->id, $tag->name),
-                    (array)($tagResult->tags ?? [])
-                ),
-            );
-        }, nullOn404: true);
+                foreach($categoryResult->categories as $category) {
+                    $groupResult = $api->listInterestCategoryInterests($source->remoteId, $category->id, [
+                        'interests.id', 'interests.name'
+                    ]);
+
+                    foreach($groupResult->interests as $group) {
+                        $groups[] = new GroupInfo(
+                            id: $group->id,
+                            name: $group->name,
+                            categoryId: $category->id,
+                            categoryName: $category->title,
+                        );
+                    }
+                }
+
+
+                $tagResult = $api->tagSearch($source->remoteId);
+
+                return new ListInfo(
+                    id: $listResult->id,
+                    name: $listResult->name,
+                    creationDate: $listResult->date_created
+                        ? CarbonImmutable::parse($listResult->date_created)
+                        : null,
+                    subscribeUrl: $listResult->subscribe_url_short ?? null,
+                    memberCount: $listResult->stats->member_count ?? null,
+                    groups: $groups,
+                    tags: array_map(
+                        fn($tag) => new TagInfo((string)$tag->id, $tag->name),
+                        (array)($tagResult->tags ?? [])
+                    ),
+                );
+            }
+        );
     }
 
     public function subscribe(
-        SubscriptionRequest $request
+        SourceReference $source,
+        MemberDataRequest $request
     ): SubscriptionResponse {
-        $request->subscribe = true;
-        return $this->update($request);
+        return $this->updateMember($source, $request, true);
     }
 
     public function update(
-        SubscriptionRequest $request,
+        SourceReference $source,
+        MemberDataRequest $request,
     ): SubscriptionResponse {
-        return $this->withApiClient(function(
-            ApiClient $client
-        ) use ($request): SubscriptionResponse {
-            $data = $mergeFields = [];
+        return $this->updateMember($source, $request, false);
+    }
 
-            if($request->subscribe) {
-                $data['status'] = 'subscribed';
-            }
+    protected function updateMember(
+        SourceReference $source,
+        MemberDataRequest $request,
+        bool $subscribe = false
+    ): SubscriptionResponse {
+        return $this->withListsApi(
+            source: $source,
+            dataRequest: $request,
+            action:function(
+                ListsApi $api
+            ) use ($source, $request, $subscribe): SubscriptionResponse {
+                $data = $mergeFields = [];
 
-            if($request->emailType !== null) {
-                $data['email_type'] = match($request->emailType) {
-                    EmailType::Html => 'html',
-                    EmailType::Text => 'text'
-                };
-            }
-
-            if($request->firstName !== null) {
-                $mergeFields['FNAME'] = $request->firstName;
-            }
-
-            if($request->lastName !== null) {
-                $mergeFields['LNAME'] = $request->lastName;
-            }
-
-            if($request->language !== null) {
-                $data['language'] = $request->language;
-            }
-
-            if(!empty($mergeFields)) {
-                $data['merge_fields'] = $mergeFields;
-            }
-
-            if(!empty($request->groups)) {
-                $data['interests'] = $request->groups;
-            }
-
-
-            if(!empty($data)) {
-                $data['email_address'] = $request->email;
-                $data['status_if_new'] = 'subscribed';
-
-                // @phpstan-ignore-next-line
-                $result = $client->lists->setListMember(
-                    $request->listId,
-                    $this->hashEmail($request->email),
-                    $data
-                );
-
-                $output = new SubscriptionResponse(
-                    success: true,
-                    subscribed: $result->status === 'subscribed',
-                    bounced: $result->status === 'cleaned',
-                    invalid: $result->status === 'cleaned',
-                    mailbox: new Mailbox($result->email_address, $this->getMergeName($result->merge_fields)),
-                );
-            } else {
-                // @phpstan-ignore-next-line
-                $result = $client->lists->getListMember($request->listId, $this->hashEmail($request->email), [
-                    'status',
-                    'merge_fields.FNAME', 'merge_fields.LNAME',
-                ]);
-
-                $output = new SubscriptionResponse(
-                    success: true,
-                    subscribed: $result->status === 'subscribed',
-                    bounced: $result->status === 'cleaned',
-                    invalid: $result->status === 'cleaned',
-                    mailbox: new Mailbox($request->email, $this->getMergeName($result->merge_fields))
-                );
-            }
-
-
-            // Call separately
-            if(!empty($request->tags)) {
-                try {
-                    // @phpstan-ignore-next-line
-                    $client->lists->updateListMemberTags(
-                        $request->listId,
-                        $this->hashEmail($request->email),
-                        [
-                            'tags' => array_map(
-                                fn($tag, $enabled) => [
-                                    'name' => $tag,
-                                    'status' => $enabled ?
-                                        'active' :
-                                        'inactive'
-                                ],
-                                array_keys($request->tags),
-                                array_values($request->tags)
-                            )
-                        ]
-                    );
-                } catch (Throwable $e) {
-                    // This is a non-critical operation
+                if($subscribe) {
+                    $data['status'] = 'subscribed';
                 }
-            }
 
-            return $output;
-        }, subscriptionRequest: $request);
+                if($request->emailType !== null) {
+                    $data['email_type'] = match($request->emailType) {
+                        EmailType::Html => 'html',
+                        EmailType::Text => 'text'
+                    };
+                }
+
+                if($request->firstName !== null) {
+                    $mergeFields['FNAME'] = $request->firstName;
+                }
+
+                if($request->lastName !== null) {
+                    $mergeFields['LNAME'] = $request->lastName;
+                }
+
+                if($request->language !== null) {
+                    $data['language'] = $request->language;
+                }
+
+                if(!empty($mergeFields)) {
+                    $data['merge_fields'] = $mergeFields;
+                }
+
+                if(!empty($request->groups)) {
+                    $data['interests'] = $request->groups;
+                }
+
+
+                if(!empty($data)) {
+                    $data['email_address'] = $request->email;
+                    $data['status_if_new'] = 'subscribed';
+
+                    $result = $api->setListMember(
+                        $source->remoteId,
+                        $this->hashEmail($request->email),
+                        $data
+                    );
+
+                    $output = new SubscriptionResponse(
+                        source: $source,
+                        success: true,
+                        status: $this->normalizeStatus($result->status),
+                        mailbox: new Mailbox($result->email_address, $this->getMergeName($result->merge_fields)),
+                    );
+                } else {
+                    $result = $api->getListMember($source->remoteId, $this->hashEmail($request->email), [
+                        'status',
+                        'merge_fields.FNAME', 'merge_fields.LNAME',
+                    ]);
+
+                    $output = new SubscriptionResponse(
+                        source: $source,
+                        success: true,
+                        status: $this->normalizeStatus($result->status),
+                        mailbox: new Mailbox($request->email, $this->getMergeName($result->merge_fields))
+                    );
+                }
+
+
+                // Call separately
+                if(!empty($request->tags)) {
+                    try {
+                        $api->updateListMemberTags(
+                            $source->remoteId,
+                            $this->hashEmail($request->email),
+                            [
+                                'tags' => array_map(
+                                    fn($tag, $enabled) => [
+                                        'name' => $tag,
+                                        'status' => $enabled ?
+                                            'active' :
+                                            'inactive'
+                                    ],
+                                    array_keys($request->tags),
+                                    array_values($request->tags)
+                                )
+                            ]
+                        );
+                    } catch (Throwable $e) {
+                        // This is a non-critical operation
+                        Monarch::logException($e);
+                    }
+                }
+
+                return $output;
+            }
+        );
     }
 
     public function unsubscribe(
-        string $listId,
+        SourceReference $source,
         string $email
     ): SubscriptionResponse {
-        return $this->withApiClient(function(
-            ApiClient $client
-        ) use ($listId, $email): SubscriptionResponse {
-            // @phpstan-ignore-next-line
-            $result = $client->lists->updateListMember(
-                $listId,
-                $this->hashEmail($email),
-                ['status' => 'unsubscribed']
-            );
+        return $this->withListsApi(
+            source: $source,
+            dataRequest: new MemberDataRequest(
+                email: $email
+            ),
+            action: function(
+                ListsApi $api
+            ) use ($source, $email): SubscriptionResponse {
+                $result = $api->updateListMember(
+                    $source->remoteId,
+                    $this->hashEmail($email),
+                    ['status' => 'unsubscribed']
+                );
 
-            return new SubscriptionResponse(
-                success: true,
-                subscribed: false,
-                mailbox: new Mailbox($result->email_address, $this->getMergeName($result->merge_fields)),
-            );
-        }, subscriptionRequest: new SubscriptionRequest(
-            listId: $listId,
-            email: $email
-        ));
+                return new SubscriptionResponse(
+                    source: $source,
+                    success: true,
+                    status: $this->normalizeStatus($result->status),
+                    mailbox: new Mailbox($result->email_address, $this->getMergeName($result->merge_fields)),
+                );
+            }
+        );
     }
 
     public function fetchMemberInfo(
-        string $listId,
+        SourceReference $source,
+        ListInfo $listInfo,
         string $email
     ): ?MemberInfo {
-        return $this->withApiClient(function(
-            ApiClient $client
-        ) use ($listId, $email): MemberInfo {
-            // @phpstan-ignore-next-line
-            $result = $client->lists->getListMember($listId, $this->hashEmail($email), [
-                'id', 'email_address', 'status',
-                'timestamp_signup', 'timestamp_opt',
-                'merge_fields.FNAME', 'merge_fields.LNAME',
-                'location.country_code', 'language', 'email_type',
-                'interests', 'tags'
-            ]);
+        return $this->withListsApi(
+            source: $source,
+            nullOn404: true,
+            action: function(
+                ListsApi $api
+            ) use ($source, $listInfo, $email): MemberInfo {
+                $result = $api->getListMember($source->remoteId, $this->hashEmail($email), [
+                    'id', 'email_address', 'status',
+                    'timestamp_signup', 'timestamp_opt',
+                    'merge_fields.FNAME', 'merge_fields.LNAME',
+                    'location.country_code', 'language', 'email_type',
+                    'interests', 'tags'
+                ]);
 
-            return new MemberInfo(
-                id: $result->id,
-                email: $result->email_address,
-                status: match($result->status) {
-                    'subscribed' => MemberStatus::Subscribed,
-                    'unsubscribed' => MemberStatus::Unsubscribed,
-                    'cleaned' => MemberStatus::Invalid,
-                    'pending' => MemberStatus::Pending,
-                    'transactional' => MemberStatus::Subscribed,
-                    'archived' => MemberStatus::Archived,
-                    default => MemberStatus::Archived
-                },
-                creationDate: $result->timestamp_signup
-                    ? CarbonImmutable::parse($result->timestamp_signup)
-                    : (
-                        $result->timestamp_opt ?
-                            CarbonImmutable::parse($result->timestamp_opt) :
-                            null
+                return new MemberInfo(
+                    id: $result->id,
+                    email: $result->email_address,
+                    status: $this->normalizeStatus($result->status),
+                    creationDate: $result->timestamp_signup
+                        ? CarbonImmutable::parse($result->timestamp_signup)
+                        : (
+                            $result->timestamp_opt ?
+                                CarbonImmutable::parse($result->timestamp_opt) :
+                                null
+                        ),
+                    firstName: $result->merge_fields->FNAME ?: null,
+                    lastName: $result->merge_fields->LNAME ?: null,
+                    country: $result->location->country_code ?? null,
+                    language: $result->language ?? null,
+                    emailType: match($result->email_type) {
+                        'html' => EmailType::Html,
+                        'text' => EmailType::Text,
+                        default => null
+                    },
+                    groups: array_filter(
+                        array_map(
+                            fn($enabled, $id): ?GroupInfo => (
+                                $enabled && ($group = ($listInfo->groups[$id] ?? null))
+                            ) ?
+                                $group :
+                                null,
+                            $i = (array)($result->interests ?? []),
+                            array_keys($i)
+                        ),
+                        fn(?GroupInfo $group) => $group !== null
                     ),
-                firstName: $result->merge_fields->FNAME ?: null,
-                lastName: $result->merge_fields->LNAME ?: null,
-                country: $result->location->country_code ?? null,
-                language: $result->language ?? null,
-                emailType: match($result->email_type) {
-                    'html' => EmailType::Html,
-                    'text' => EmailType::Text,
-                    default => null
-                },
-                groupIds: array_filter(
-                    array_map(
-                        fn($enabled, $id): ?string => $enabled ? (string)$id : null,
-                        $i = (array)($result->interests ?? []),
-                        array_keys($i)
-                    ),
-                    fn(?string $id) => $id !== null
-                ),
-                tags: array_map(
-                    fn($tag) => new TagInfo((string)$tag->id, $tag->name),
-                    (array)($result->tags ?? [])
-                )
-            );
-        }, nullOn404: true);
+                    tags: array_map(
+                        fn($tag) => new TagInfo((string)$tag->id, $tag->name),
+                        (array)($result->tags ?? [])
+                    )
+                );
+            }
+        );
     }
 
     /**
      * Wrap calls to redirect Exceptions and suppress deprecated warnings
      *
      * @template TReturn
-     * @param callable(ApiClient): TReturn $callback
-     * @return ($nullOn404 is true ? ?TReturn : ($subscriptionRequest is null ? TReturn : SubscriptionResponse))
+     * @param callable(ListsApi): TReturn $action
+     * @return ($nullOn404 is true ? ?TReturn : ($dataRequest is null ? TReturn : SubscriptionResponse))
      */
-    protected function withApiClient(
-        callable $callback,
+    protected function withListsApi(
+        callable $action,
+        ?SourceReference $source = null,
+        ?MemberDataRequest $dataRequest = null,
         bool $nullOn404 = false,
-        ?SubscriptionRequest $subscriptionRequest = null
     ): mixed {
+        $errorReporting = error_reporting();
+        error_reporting($errorReporting & ~E_DEPRECATED);
+        $api = $this->getListsApi();
+        error_reporting($errorReporting);
+
         try {
-            $errorReporting = error_reporting();
-            error_reporting($errorReporting & ~E_DEPRECATED);
-            $client = $this->getApiClient();
-            $output = $callback($client);
-            error_reporting($errorReporting);
+            $output = $action($api);
             return $output;
         } catch (HttpClientException $e) {
             $response = $e->getResponse();
@@ -328,6 +373,13 @@ class Mailchimp implements Adapter
                 return null;
             }
 
+            if(!$source) {
+                throw Exceptional::Runtime(
+                    message: 'No source provided',
+                    previous: $e
+                );
+            }
+
             $data = Coercion::toArray(
                 json_decode($response->getBody()->getContents(), true)
             );
@@ -335,28 +387,29 @@ class Mailchimp implements Adapter
 
             if(
                 $status === 400 &&
-                $subscriptionRequest
+                $dataRequest
             ) {
                 $result = new SubscriptionResponse(
+                    source: $source,
                     success: false,
                     mailbox: new Mailbox(
-                        $subscriptionRequest->email,
-                        $subscriptionRequest->fullName
+                        $dataRequest->email,
+                        $dataRequest->fullName
                     )
                 );
 
                 if (preg_match('/fake or invalid/i', $e->getMessage())) {
-                    $result->invalid = true;
+                    $result->failureReason = FailureReason::EmailInvalid;
                 } elseif (preg_match('/not allowing more signups for now/i', $e->getMessage())) {
-                    $result->throttled = true;
+                    $result->failureReason = FailureReason::Throttled;
                 } elseif (preg_match('/is in a compliance state/i', $e->getMessage())) {
-                    $result->requiresManualInput = true;
+                    $result->failureReason = FailureReason::Compliance;
 
                     try {
-                        // @phpstan-ignore-next-line
-                        $listResult = $client->lists->getList($subscriptionRequest->listId, [
+                        $listResult = $api->getList($source->remoteId, [
                             'subscribe_url_short'
                         ]);
+
                         $result->manualInputUrl = $listResult->subscribe_url_short ?? null;
                     } catch(Throwable $e) {
                     }
@@ -401,10 +454,31 @@ class Mailchimp implements Adapter
         return $this->apiClient;
     }
 
+    protected function getListsApi(): ListsApi
+    {
+        $client = $this->getApiClient();
+        // @phpstan-ignore-next-line
+        return $client->{'lists'};
+    }
+
     protected function hashEmail(
         string $email
     ): string {
         return md5(strtolower(trim($email)));
+    }
+
+    protected function normalizeStatus(
+        string $status
+    ): MemberStatus {
+        return match($status) {
+            'subscribed' => MemberStatus::Subscribed,
+            'unsubscribed' => MemberStatus::Unsubscribed,
+            'cleaned' => MemberStatus::Invalid,
+            'pending' => MemberStatus::Pending,
+            'transactional' => MemberStatus::Subscribed,
+            'archived' => MemberStatus::Archived,
+            default => MemberStatus::Archived
+        };
     }
 
     protected function getMergeName(
