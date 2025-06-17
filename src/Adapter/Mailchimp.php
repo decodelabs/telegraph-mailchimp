@@ -17,6 +17,7 @@ use DecodeLabs\Monarch;
 use DecodeLabs\Nuance\SensitiveProperty;
 use DecodeLabs\Relay\Mailbox;
 use DecodeLabs\Telegraph\Adapter;
+use DecodeLabs\Telegraph\AdapterActionResult;
 use DecodeLabs\Telegraph\FailureReason;
 use DecodeLabs\Telegraph\Source\EmailType;
 use DecodeLabs\Telegraph\Source\GroupInfo;
@@ -135,30 +136,45 @@ class Mailchimp implements Adapter
 
     public function subscribe(
         SourceReference $source,
+        ListInfo $listInfo,
         MemberDataRequest $request
-    ): SubscriptionResponse {
-        return $this->updateMember($source, $request, true);
+    ): AdapterActionResult {
+        if($request->email === null) {
+            throw Exceptional::InvalidArgument(
+                'Email address is required'
+            );
+        }
+
+        return $this->updateMember($source, $listInfo, $request->email, $request, true);
     }
 
     public function update(
         SourceReference $source,
+        ListInfo $listInfo,
+        string $email,
         MemberDataRequest $request,
-    ): SubscriptionResponse {
-        return $this->updateMember($source, $request, false);
+    ): AdapterActionResult {
+        return $this->updateMember($source, $listInfo, $email,$request, false);
     }
 
     protected function updateMember(
         SourceReference $source,
+        ListInfo $listInfo,
+        string $email,
         MemberDataRequest $request,
         bool $subscribe = false
-    ): SubscriptionResponse {
+    ): AdapterActionResult {
         return $this->withListsApi(
             source: $source,
             dataRequest: $request,
             action:function(
                 ListsApi $api
-            ) use ($source, $request, $subscribe): SubscriptionResponse {
+            ) use ($source, $listInfo, $email, $request, $subscribe): AdapterActionResult {
                 $data = $mergeFields = [];
+
+                if($request->email !== null) {
+                    $data['email_address'] = $request->email;
+                }
 
                 if($subscribe) {
                     $data['status'] = 'subscribed';
@@ -192,43 +208,12 @@ class Mailchimp implements Adapter
                 }
 
 
-                if(!empty($data)) {
-                    $data['email_address'] = $request->email;
-                    $data['status_if_new'] = 'subscribed';
-
-                    $result = $api->setListMember(
-                        $source->remoteId,
-                        $this->hashEmail($request->email),
-                        $data
-                    );
-
-                    $output = new SubscriptionResponse(
-                        source: $source,
-                        success: true,
-                        status: $this->normalizeStatus($result->status),
-                        mailbox: new Mailbox($result->email_address, $this->getMergeName($result->merge_fields)),
-                    );
-                } else {
-                    $result = $api->getListMember($source->remoteId, $this->hashEmail($request->email), [
-                        'status',
-                        'merge_fields.FNAME', 'merge_fields.LNAME',
-                    ]);
-
-                    $output = new SubscriptionResponse(
-                        source: $source,
-                        success: true,
-                        status: $this->normalizeStatus($result->status),
-                        mailbox: new Mailbox($request->email, $this->getMergeName($result->merge_fields))
-                    );
-                }
-
-
                 // Call separately
                 if(!empty($request->tags)) {
                     try {
                         $api->updateListMemberTags(
                             $source->remoteId,
-                            $this->hashEmail($request->email),
+                            $this->hashEmail($email),
                             [
                                 'tags' => array_map(
                                     fn($tag, $enabled) => [
@@ -248,15 +233,77 @@ class Mailchimp implements Adapter
                     }
                 }
 
-                return $output;
+
+                if(!empty($data)) {
+                    $data['email_address'] = $request->email;
+                    $data['status_if_new'] = 'subscribed';
+
+                    $result = $api->setListMember(
+                        $source->remoteId,
+                        $this->hashEmail($email),
+                        $data
+                    );
+                } else {
+                    $result = $api->getListMember($source->remoteId, $this->hashEmail($email), [
+                        'status',
+                        'merge_fields.FNAME', 'merge_fields.LNAME',
+                    ]);
+                }
+
+                return new AdapterActionResult(
+                    new SubscriptionResponse(
+                        source: $source,
+                        success: true,
+                        status: $this->normalizeStatus($result->status),
+                        mailbox: new Mailbox($result->email_address, $this->getMergeName($result->merge_fields))
+                    ),
+                    new MemberInfo(
+                        id: $result->id,
+                        email: $result->email_address,
+                        status: $this->normalizeStatus($result->status),
+                        creationDate: $result->timestamp_signup
+                            ? CarbonImmutable::parse($result->timestamp_signup)
+                            : (
+                                $result->timestamp_opt ?
+                                    CarbonImmutable::parse($result->timestamp_opt) :
+                                    null
+                            ),
+                        firstName: $result->merge_fields->FNAME ?: null,
+                        lastName: $result->merge_fields->LNAME ?: null,
+                        country: $result->location->country_code ?? null,
+                        language: $result->language ?? null,
+                        emailType: match($result->email_type) {
+                            'html' => EmailType::Html,
+                            'text' => EmailType::Text,
+                            default => null
+                        },
+                        groups: array_filter(
+                            array_map(
+                                fn($enabled, $id): ?GroupInfo => (
+                                    $enabled && ($group = ($listInfo->groups[$id] ?? null))
+                                ) ?
+                                    $group :
+                                    null,
+                                $i = (array)($result->interests ?? []),
+                                array_keys($i)
+                            ),
+                            fn(?GroupInfo $group) => $group !== null
+                        ),
+                        tags: array_map(
+                            fn($tag) => new TagInfo((string)$tag->id, $tag->name),
+                            (array)($result->tags ?? [])
+                        )
+                    )
+                );
             }
         );
     }
 
     public function unsubscribe(
         SourceReference $source,
+        ListInfo $listInfo,
         string $email
-    ): SubscriptionResponse {
+    ): AdapterActionResult {
         return $this->withListsApi(
             source: $source,
             dataRequest: new MemberDataRequest(
@@ -264,18 +311,20 @@ class Mailchimp implements Adapter
             ),
             action: function(
                 ListsApi $api
-            ) use ($source, $email): SubscriptionResponse {
+            ) use ($source, $email): AdapterActionResult {
                 $result = $api->updateListMember(
                     $source->remoteId,
                     $this->hashEmail($email),
                     ['status' => 'unsubscribed']
                 );
 
-                return new SubscriptionResponse(
-                    source: $source,
-                    success: true,
-                    status: $this->normalizeStatus($result->status),
-                    mailbox: new Mailbox($result->email_address, $this->getMergeName($result->merge_fields)),
+                return new AdapterActionResult(
+                    new SubscriptionResponse(
+                        source: $source,
+                        success: true,
+                        status: $this->normalizeStatus($result->status),
+                        mailbox: new Mailbox($result->email_address, $this->getMergeName($result->merge_fields)),
+                    )
                 );
             }
         );
@@ -346,7 +395,7 @@ class Mailchimp implements Adapter
      *
      * @template TReturn
      * @param callable(ListsApi): TReturn $action
-     * @return ($nullOn404 is true ? ?TReturn : ($dataRequest is null ? TReturn : SubscriptionResponse))
+     * @return ($nullOn404 is true ? ?TReturn : ($dataRequest is null ? TReturn : AdapterActionResult))
      */
     protected function withListsApi(
         callable $action,
@@ -389,33 +438,29 @@ class Mailchimp implements Adapter
                 $status === 400 &&
                 $dataRequest
             ) {
-                $result = new SubscriptionResponse(
+                $response = new SubscriptionResponse(
                     source: $source,
                     success: false,
-                    mailbox: new Mailbox(
-                        $dataRequest->email,
-                        $dataRequest->fullName
-                    )
                 );
 
                 if (preg_match('/fake or invalid/i', $e->getMessage())) {
-                    $result->failureReason = FailureReason::EmailInvalid;
+                    $response->failureReason = FailureReason::EmailInvalid;
                 } elseif (preg_match('/not allowing more signups for now/i', $e->getMessage())) {
-                    $result->failureReason = FailureReason::Throttled;
+                    $response->failureReason = FailureReason::Throttled;
                 } elseif (preg_match('/is in a compliance state/i', $e->getMessage())) {
-                    $result->failureReason = FailureReason::Compliance;
+                    $response->failureReason = FailureReason::Compliance;
 
                     try {
                         $listResult = $api->getList($source->remoteId, [
                             'subscribe_url_short'
                         ]);
 
-                        $result->manualInputUrl = $listResult->subscribe_url_short ?? null;
+                        $response->manualInputUrl = $listResult->subscribe_url_short ?? null;
                     } catch(Throwable $e) {
                     }
                 }
 
-                return $result;
+                return new AdapterActionResult($response);
             }
 
 
