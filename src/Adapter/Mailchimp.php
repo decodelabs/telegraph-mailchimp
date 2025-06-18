@@ -433,6 +433,9 @@ class Mailchimp implements Adapter
                 json_decode($response->getBody()->getContents(), true)
             );
 
+            $message = Coercion::toString($data['detail'] ?? $e->getMessage());
+
+
 
             if(
                 $status === 400 &&
@@ -443,11 +446,11 @@ class Mailchimp implements Adapter
                     success: false,
                 );
 
-                if (preg_match('/fake or invalid/i', $e->getMessage())) {
+                if (preg_match('/fake or invalid/i', $message)) {
                     $response->failureReason = FailureReason::EmailInvalid;
-                } elseif (preg_match('/not allowing more signups for now/i', $e->getMessage())) {
+                } elseif (preg_match('/not allowing more signups for now/i', $message)) {
                     $response->failureReason = FailureReason::Throttled;
-                } elseif (preg_match('/is in a compliance state/i', $e->getMessage())) {
+                } elseif (preg_match('/is in a compliance state/i', $message)) {
                     $response->failureReason = FailureReason::Compliance;
 
                     try {
@@ -460,6 +463,13 @@ class Mailchimp implements Adapter
                     }
                 }
 
+                Monarch::logException(
+                    Exceptional::Runtime(
+                        message: $message,
+                        previous: $e
+                    )
+                );
+
                 return new AdapterActionResult($response);
             }
 
@@ -471,7 +481,7 @@ class Mailchimp implements Adapter
             };
 
             throw Exceptional::{$exceptionType}(
-                message: Coercion::toString($data['detail'] ?? $e->getMessage()),
+                message: $message,
                 http: Coercion::toInt($data['status'] ?? $status),
                 //previous: $e
             );
