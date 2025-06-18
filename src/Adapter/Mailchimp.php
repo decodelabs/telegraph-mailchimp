@@ -466,7 +466,6 @@ class Mailchimp implements Adapter
                 Monarch::logException(
                     Exceptional::Runtime(
                         message: $message,
-                        previous: $e
                     )
                 );
 
