@@ -211,22 +211,30 @@ class Mailchimp implements Adapter
 
                 // Call separately
                 if(!empty($request->tags)) {
+                    $tags = [];
+
+                    foreach($request->tags as $id => $intent) {
+                        if(
+                            is_numeric($id) &&
+                            isset($listInfo->tags[$id])
+                        ) {
+                            $id = $listInfo->tags[$id]->name;
+                        }
+
+                        $tags[] = [
+                            'name' => $id,
+                            'status' => $intent ?
+                                'active' :
+                                'inactive'
+                        ];
+                    }
+
+
                     try {
                         $api->updateListMemberTags(
                             $source->remoteId,
                             $this->hashEmail($email),
-                            [
-                                'tags' => array_map(
-                                    fn($tag, $enabled) => [
-                                        'name' => $tag,
-                                        'status' => $enabled ?
-                                            'active' :
-                                            'inactive'
-                                    ],
-                                    array_keys($request->tags),
-                                    array_values($request->tags)
-                                )
-                            ]
+                            ['tags' => $tags]
                         );
                     } catch (Throwable $e) {
                         // This is a non-critical operation
