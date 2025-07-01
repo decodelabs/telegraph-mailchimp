@@ -18,6 +18,7 @@ use DecodeLabs\Nuance\SensitiveProperty;
 use DecodeLabs\Relay\Mailbox;
 use DecodeLabs\Telegraph\Adapter;
 use DecodeLabs\Telegraph\AdapterActionResult;
+use DecodeLabs\Telegraph\Adapter\Mailchimp\ListsApiOverride;
 use DecodeLabs\Telegraph\FailureReason;
 use DecodeLabs\Telegraph\Source\EmailType;
 use DecodeLabs\Telegraph\Source\GroupInfo;
@@ -511,8 +512,7 @@ class Mailchimp implements Adapter
     protected function getListsApi(): ListsApi
     {
         $client = $this->getApiClient();
-        // @phpstan-ignore-next-line
-        return $client->{'lists'};
+        return new ListsApiOverride($client);
     }
 
     protected function hashEmail(
