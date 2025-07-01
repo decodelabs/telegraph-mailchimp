@@ -209,7 +209,25 @@ class Mailchimp implements Adapter
                 }
 
 
-                // Call separately
+                $result = null;
+
+
+                // Update member info
+                if(!empty($data)) {
+                    $data['email_address'] = $request->email;
+                    $data['status_if_new'] = 'subscribed';
+
+                    $result = $api->setListMember(
+                        $source->remoteId,
+                        $this->hashEmail($email),
+                        $data
+                    );
+                }
+
+
+                // Update tags separately
+                $tagsUpdated = false;
+
                 if(!empty($request->tags)) {
                     $tags = [];
 
@@ -236,29 +254,55 @@ class Mailchimp implements Adapter
                             $this->hashEmail($email),
                             ['tags' => $tags]
                         );
+
+                        $tagsUpdated = true;
                     } catch (Throwable $e) {
                         // This is a non-critical operation
                         Monarch::logException($e);
+                        $tagsUpdated = false;
                     }
                 }
 
 
-                if(!empty($data)) {
-                    $data['email_address'] = $request->email;
-                    $data['status_if_new'] = 'subscribed';
-
-                    $result = $api->setListMember(
-                        $source->remoteId,
-                        $this->hashEmail($email),
-                        $data
-                    );
-                } else {
-                    $result = $api->getListMember($source->remoteId, $this->hashEmail($email), [
-                        'status',
-                        'merge_fields.FNAME', 'merge_fields.LNAME',
-                    ]);
+                // Fetch member info if no user data was provided
+                if(empty($data)){
+                    $result = $api->getListMember($source->remoteId, $this->hashEmail($email));
                 }
 
+
+
+                // Create tag map for output
+                $tagMap = [];
+
+                foreach((array)($result->tags ?? []) as $tag) {
+                    $tagMap[$tag->id] = new TagInfo((string)$tag->id, $tag->name);
+                }
+
+
+                // Update tag map if tags were updated
+                if(
+                    !empty($data) &&
+                    $tagsUpdated
+                ) {
+                    foreach($request->tags as $id => $intent) {
+                        if(!$intent) {
+                            unset($tagMap[$id]);
+                            continue;
+                        }
+
+                        if(
+                            !isset($tagMap[$id]) ||
+                            !isset($listInfo->tags[$id])
+                        ) {
+                            continue;
+                        }
+
+                        $tagMap[$id] = $listInfo->tags[$id];
+                    }
+                }
+
+
+                // Return result
                 return new AdapterActionResult(
                     new SubscriptionResponse(
                         source: $source,
@@ -298,10 +342,7 @@ class Mailchimp implements Adapter
                             ),
                             fn(?GroupInfo $group) => $group !== null
                         ),
-                        tags: array_map(
-                            fn($tag) => new TagInfo((string)$tag->id, $tag->name),
-                            (array)($result->tags ?? [])
-                        )
+                        tags: $tagMap
                     )
                 );
             }
