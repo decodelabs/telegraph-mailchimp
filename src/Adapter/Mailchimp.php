@@ -279,7 +279,7 @@ class Mailchimp implements Adapter
                             ),
                         firstName: $result->merge_fields->FNAME ?: null,
                         lastName: $result->merge_fields->LNAME ?: null,
-                        country: $result->location->country_code ?? null,
+                        country: $result->location->country_code ?: null,
                         language: $result->language ?? null,
                         emailType: match($result->email_type) {
                             'html' => EmailType::Html,
@@ -371,7 +371,7 @@ class Mailchimp implements Adapter
                         ),
                     firstName: $result->merge_fields->FNAME ?: null,
                     lastName: $result->merge_fields->LNAME ?: null,
-                    country: $result->location->country_code ?? null,
+                    country: $result->location->country_code ?: null,
                     language: $result->language ?? null,
                     emailType: match($result->email_type) {
                         'html' => EmailType::Html,
