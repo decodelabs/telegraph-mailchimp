@@ -5,7 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
+--
+
+---
+
+### [v0.2.9](https://github.com/decodelabs/telegraph-mailchimp/commits/v0.2.9) - 16th July 2025
+
 - Applied ECS formatting to all code
+
+[Full list of changes](https://github.com/decodelabs/telegraph-mailchimp/compare/v0.2.8...v0.2.9)
 
 ---
 
