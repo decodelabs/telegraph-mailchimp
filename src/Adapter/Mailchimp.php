@@ -17,9 +17,10 @@ use DecodeLabs\Monarch;
 use DecodeLabs\Nuance\SensitiveProperty;
 use DecodeLabs\Relay\Mailbox;
 use DecodeLabs\Telegraph\Adapter;
-use DecodeLabs\Telegraph\AdapterActionResult;
 use DecodeLabs\Telegraph\Adapter\Mailchimp\ListsApiOverride;
+use DecodeLabs\Telegraph\AdapterActionResult;
 use DecodeLabs\Telegraph\FailureReason;
+use DecodeLabs\Telegraph\MemberDataRequest;
 use DecodeLabs\Telegraph\Source\EmailType;
 use DecodeLabs\Telegraph\Source\GroupInfo;
 use DecodeLabs\Telegraph\Source\ListInfo;
@@ -27,13 +28,12 @@ use DecodeLabs\Telegraph\Source\ListReference;
 use DecodeLabs\Telegraph\Source\MemberInfo;
 use DecodeLabs\Telegraph\Source\MemberStatus;
 use DecodeLabs\Telegraph\Source\TagInfo;
-use DecodeLabs\Telegraph\MemberDataRequest;
 use DecodeLabs\Telegraph\SourceReference;
 use DecodeLabs\Telegraph\SubscriptionResponse;
 use Exception;
 use GuzzleHttp\Exception\ClientException as HttpClientException;
-use MailchimpMarketing\ApiClient;
 use MailchimpMarketing\Api\ListsApi;
+use MailchimpMarketing\ApiClient;
 use Throwable;
 
 class Mailchimp implements Adapter
@@ -47,7 +47,7 @@ class Mailchimp implements Adapter
         array $settings
     ) {
         // API Key
-        if(null === ($apiKey = Coercion::tryString($settings['apiKey'] ?? null))) {
+        if (null === ($apiKey = Coercion::tryString($settings['apiKey'] ?? null))) {
             throw Exceptional::InvalidArgument(
                 'Mailchimp API key is required'
             );
@@ -59,13 +59,13 @@ class Mailchimp implements Adapter
     public function fetchAllListReferences(): array
     {
         return $this->withListsApi(
-            action: function(
+            action: function (
                 ListsApi $api
             ): array {
                 $listResult = $api->getAllLists();
                 $output = [];
 
-                foreach($listResult->lists as $list) {
+                foreach ($listResult->lists as $list) {
                     $output[] = new ListReference(
                         id: $list->id,
                         name: $list->name,
@@ -88,7 +88,7 @@ class Mailchimp implements Adapter
         return $this->withListsApi(
             source: $source,
             nullOn404: true,
-            action: function(
+            action: function (
                 ListsApi $api
             ) use ($source): ListInfo {
                 $listResult = $api->getList($source->remoteId, [
@@ -99,12 +99,12 @@ class Mailchimp implements Adapter
                 $categoryResult = $api->getListInterestCategories($source->remoteId, count: 1000);
                 $groups = [];
 
-                foreach($categoryResult->categories as $category) {
+                foreach ($categoryResult->categories as $category) {
                     $groupResult = $api->listInterestCategoryInterests($source->remoteId, $category->id, [
                         'interests.id', 'interests.name'
                     ], count: 1000);
 
-                    foreach($groupResult->interests as $group) {
+                    foreach ($groupResult->interests as $group) {
                         $groups[] = new GroupInfo(
                             id: $group->id,
                             name: $group->name,
@@ -127,7 +127,7 @@ class Mailchimp implements Adapter
                     memberCount: $listResult->stats->member_count ?? null,
                     groups: $groups,
                     tags: array_map(
-                        fn($tag) => new TagInfo((string)$tag->id, $tag->name),
+                        fn ($tag) => new TagInfo((string)$tag->id, $tag->name),
                         (array)($tagResult->tags ?? [])
                     ),
                 );
@@ -140,7 +140,7 @@ class Mailchimp implements Adapter
         ListInfo $listInfo,
         MemberDataRequest $request
     ): AdapterActionResult {
-        if($request->email === null) {
+        if ($request->email === null) {
             throw Exceptional::InvalidArgument(
                 'Email address is required'
             );
@@ -155,7 +155,7 @@ class Mailchimp implements Adapter
         string $email,
         MemberDataRequest $request,
     ): AdapterActionResult {
-        return $this->updateMember($source, $listInfo, $email,$request, false);
+        return $this->updateMember($source, $listInfo, $email, $request, false);
     }
 
     protected function updateMember(
@@ -168,43 +168,43 @@ class Mailchimp implements Adapter
         return $this->withListsApi(
             source: $source,
             dataRequest: $request,
-            action:function(
+            action: function (
                 ListsApi $api
             ) use ($source, $listInfo, $email, $request, $subscribe): AdapterActionResult {
                 $data = $mergeFields = [];
 
-                if($request->email !== null) {
+                if ($request->email !== null) {
                     $data['email_address'] = $request->email;
                 }
 
-                if($subscribe) {
+                if ($subscribe) {
                     $data['status'] = 'subscribed';
                 }
 
-                if($request->emailType !== null) {
-                    $data['email_type'] = match($request->emailType) {
+                if ($request->emailType !== null) {
+                    $data['email_type'] = match ($request->emailType) {
                         EmailType::Html => 'html',
                         EmailType::Text => 'text'
                     };
                 }
 
-                if($request->firstName !== null) {
+                if ($request->firstName !== null) {
                     $mergeFields['FNAME'] = $request->firstName;
                 }
 
-                if($request->lastName !== null) {
+                if ($request->lastName !== null) {
                     $mergeFields['LNAME'] = $request->lastName;
                 }
 
-                if($request->language !== null) {
+                if ($request->language !== null) {
                     $data['language'] = $request->language;
                 }
 
-                if(!empty($mergeFields)) {
+                if (!empty($mergeFields)) {
                     $data['merge_fields'] = $mergeFields;
                 }
 
-                if(!empty($request->groups)) {
+                if (!empty($request->groups)) {
                     $data['interests'] = $request->groups;
                 }
 
@@ -213,7 +213,7 @@ class Mailchimp implements Adapter
 
 
                 // Update member info
-                if(!empty($data)) {
+                if (!empty($data)) {
                     $data['email_address'] = $request->email;
                     $data['status_if_new'] = 'subscribed';
 
@@ -228,11 +228,11 @@ class Mailchimp implements Adapter
                 // Update tags separately
                 $tagsUpdated = false;
 
-                if(!empty($request->tags)) {
+                if (!empty($request->tags)) {
                     $tags = [];
 
-                    foreach($request->tags as $id => $intent) {
-                        if(
+                    foreach ($request->tags as $id => $intent) {
+                        if (
                             is_numeric($id) &&
                             isset($listInfo->tags[$id])
                         ) {
@@ -265,7 +265,7 @@ class Mailchimp implements Adapter
 
 
                 // Fetch member info if no user data was provided
-                if(empty($data)){
+                if (empty($data)) {
                     $result = $api->getListMember($source->remoteId, $this->hashEmail($email));
                 }
 
@@ -274,23 +274,23 @@ class Mailchimp implements Adapter
                 // Create tag map for output
                 $tagMap = [];
 
-                foreach((array)($result->tags ?? []) as $tag) {
+                foreach ((array)($result->tags ?? []) as $tag) {
                     $tagMap[$tag->id] = new TagInfo((string)$tag->id, $tag->name);
                 }
 
 
                 // Update tag map if tags were updated
-                if(
+                if (
                     !empty($data) &&
                     $tagsUpdated
                 ) {
-                    foreach($request->tags as $id => $intent) {
-                        if(!$intent) {
+                    foreach ($request->tags as $id => $intent) {
+                        if (!$intent) {
                             unset($tagMap[$id]);
                             continue;
                         }
 
-                        if(
+                        if (
                             !isset($tagMap[$id]) ||
                             !isset($listInfo->tags[$id])
                         ) {
@@ -325,14 +325,14 @@ class Mailchimp implements Adapter
                         lastName: $result->merge_fields->LNAME ?: null,
                         country: $result->location->country_code ?: null,
                         language: $result->language ?? null,
-                        emailType: match($result->email_type) {
+                        emailType: match ($result->email_type) {
                             'html' => EmailType::Html,
                             'text' => EmailType::Text,
                             default => null
                         },
                         groups: array_filter(
                             array_map(
-                                fn($enabled, $id): ?GroupInfo => (
+                                fn ($enabled, $id): ?GroupInfo => (
                                     $enabled && ($group = ($listInfo->groups[$id] ?? null))
                                 ) ?
                                     $group :
@@ -340,7 +340,7 @@ class Mailchimp implements Adapter
                                 $i = (array)($result->interests ?? []),
                                 array_keys($i)
                             ),
-                            fn(?GroupInfo $group) => $group !== null
+                            fn (?GroupInfo $group) => $group !== null
                         ),
                         tags: $tagMap
                     )
@@ -359,7 +359,7 @@ class Mailchimp implements Adapter
             dataRequest: new MemberDataRequest(
                 email: $email
             ),
-            action: function(
+            action: function (
                 ListsApi $api
             ) use ($source, $email): AdapterActionResult {
                 $result = $api->updateListMember(
@@ -388,7 +388,7 @@ class Mailchimp implements Adapter
         return $this->withListsApi(
             source: $source,
             nullOn404: true,
-            action: function(
+            action: function (
                 ListsApi $api
             ) use ($source, $listInfo, $email): MemberInfo {
                 $result = $api->getListMember($source->remoteId, $this->hashEmail($email), [
@@ -414,14 +414,14 @@ class Mailchimp implements Adapter
                     lastName: $result->merge_fields->LNAME ?: null,
                     country: $result->location->country_code ?: null,
                     language: $result->language ?? null,
-                    emailType: match($result->email_type) {
+                    emailType: match ($result->email_type) {
                         'html' => EmailType::Html,
                         'text' => EmailType::Text,
                         default => null
                     },
                     groups: array_filter(
                         array_map(
-                            fn($enabled, $id): ?GroupInfo => (
+                            fn ($enabled, $id): ?GroupInfo => (
                                 $enabled && ($group = ($listInfo->groups[$id] ?? null))
                             ) ?
                                 $group :
@@ -429,10 +429,10 @@ class Mailchimp implements Adapter
                             $i = (array)($result->interests ?? []),
                             array_keys($i)
                         ),
-                        fn(?GroupInfo $group) => $group !== null
+                        fn (?GroupInfo $group) => $group !== null
                     ),
                     tags: array_map(
-                        fn($tag) => new TagInfo((string)$tag->id, $tag->name),
+                        fn ($tag) => new TagInfo((string)$tag->id, $tag->name),
                         (array)($result->tags ?? [])
                     )
                 );
@@ -465,14 +465,14 @@ class Mailchimp implements Adapter
             $response = $e->getResponse();
             $status = $response->getStatusCode();
 
-            if(
+            if (
                 $status === 404 &&
                 $nullOn404
             ) {
                 return null;
             }
 
-            if(!$source) {
+            if (!$source) {
                 throw Exceptional::Runtime(
                     message: 'No source provided',
                     previous: $e
@@ -487,7 +487,7 @@ class Mailchimp implements Adapter
 
 
 
-            if(
+            if (
                 $status === 400 &&
                 $dataRequest
             ) {
@@ -509,7 +509,7 @@ class Mailchimp implements Adapter
                         ]);
 
                         $response->manualInputUrl = $listResult->subscribe_url_short ?? null;
-                    } catch(Throwable $e) {
+                    } catch (Throwable $e) {
                     }
                 }
 
@@ -523,7 +523,7 @@ class Mailchimp implements Adapter
             }
 
 
-            $exceptionType = match($status) {
+            $exceptionType = match ($status) {
                 404 => 'NotFound',
                 400 => 'BadRequest',
                 default => 'Runtime'
@@ -573,7 +573,7 @@ class Mailchimp implements Adapter
     protected function normalizeStatus(
         string $status
     ): MemberStatus {
-        return match($status) {
+        return match ($status) {
             'subscribed' => MemberStatus::Subscribed,
             'unsubscribed' => MemberStatus::Unsubscribed,
             'cleaned' => MemberStatus::Invalid,
