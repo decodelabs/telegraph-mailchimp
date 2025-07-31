@@ -14,7 +14,7 @@
         "decodelabs/coercion": "^0.3.3",
         "decodelabs/exceptional": "^0.6.1",
         "decodelabs/monarch": "^0.1.4",
-        "decodelabs/telegraph": "^0.4.1",
+        "decodelabs/telegraph": "^0.4.15",
 
         "mailchimp/marketing": "^3.0"
     },

@@ -21,6 +21,7 @@ use DecodeLabs\Telegraph\Adapter\Mailchimp\ListsApiOverride;
 use DecodeLabs\Telegraph\AdapterActionResult;
 use DecodeLabs\Telegraph\FailureReason;
 use DecodeLabs\Telegraph\MemberDataRequest;
+use DecodeLabs\Telegraph\Source\ConsentField;
 use DecodeLabs\Telegraph\Source\EmailType;
 use DecodeLabs\Telegraph\Source\GroupInfo;
 use DecodeLabs\Telegraph\Source\ListInfo;
@@ -40,6 +41,7 @@ class Mailchimp implements Adapter
 {
     #[SensitiveProperty]
     protected string $apiKey;
+    protected bool $supportConsent = false;
 
     private ?ApiClient $apiClient = null;
 
@@ -54,6 +56,9 @@ class Mailchimp implements Adapter
         }
 
         $this->apiKey = $apiKey;
+
+        // Support consent
+        $this->supportConsent = Coercion::toBool($settings['consent'] ?? false);
     }
 
     public function fetchAllListReferences(): array
@@ -91,11 +96,12 @@ class Mailchimp implements Adapter
             action: function (
                 ListsApi $api
             ) use ($source): ListInfo {
+                // List info
                 $listResult = $api->getList($source->remoteId, [
                     'id', 'name', 'date_created', 'stats.member_count', 'subscribe_url_short'
                 ]);
 
-
+                // Groups
                 $categoryResult = $api->getListInterestCategories($source->remoteId, count: 1000);
                 $groups = [];
 
@@ -115,7 +121,21 @@ class Mailchimp implements Adapter
                 }
 
 
+                // Tags
                 $tagResult = $api->tagSearch($source->remoteId);
+
+
+                // Consent fields
+                $permissions = [];
+
+                if ($this->supportConsent) {
+                    try {
+                        $consentResult = $api->getListMembersInfo($source->remoteId, ['members.marketing_permissions'], count: 1);
+                        $permissions = $consentResult->members[0]->marketing_permissions ?? [];
+                    } catch (Throwable $e) {
+                        Monarch::logException($e);
+                    }
+                }
 
                 return new ListInfo(
                     id: $listResult->id,
@@ -129,6 +149,13 @@ class Mailchimp implements Adapter
                     tags: array_map(
                         fn ($tag) => new TagInfo((string)$tag->id, $tag->name),
                         (array)($tagResult->tags ?? [])
+                    ),
+                    consentFields: array_map(
+                        fn ($permission) => new ConsentField(
+                            id: $permission->marketing_permission_id,
+                            description: $permission->text,
+                        ),
+                        $permissions
                     ),
                 );
             }
@@ -208,6 +235,19 @@ class Mailchimp implements Adapter
                     $data['interests'] = $request->groups;
                 }
 
+                if (
+                    $this->supportConsent &&
+                    !empty($request->consent)
+                ) {
+                    $data['marketing_permissions'] = array_map(
+                        fn ($intent, $id) => [
+                            'marketing_permission_id' => $id,
+                            'enabled' => $intent
+                        ],
+                        $request->consent,
+                        array_keys($request->consent)
+                    );
+                }
 
                 $result = null;
 
@@ -342,7 +382,19 @@ class Mailchimp implements Adapter
                             ),
                             fn (?GroupInfo $group) => $group !== null
                         ),
-                        tags: $tagMap
+                        tags: $tagMap,
+                        consent: array_filter(
+                            array_map(
+                                fn ($field): ?ConsentField => $field->enabled ?
+                                    new ConsentField(
+                                        id: Coercion::asString($field->marketing_permission_id),
+                                        description: Coercion::asString($field->text),
+                                    ) :
+                                    null,
+                                (array)($result->marketing_permissions ?? [])
+                            ),
+                            fn (?ConsentField $consent) => $consent !== null
+                        )
                     )
                 );
             }
@@ -396,7 +448,7 @@ class Mailchimp implements Adapter
                     'timestamp_signup', 'timestamp_opt',
                     'merge_fields.FNAME', 'merge_fields.LNAME',
                     'location.country_code', 'language', 'email_type',
-                    'interests', 'tags'
+                    'interests', 'tags', 'marketing_permissions'
                 ]);
 
                 return new MemberInfo(
@@ -434,6 +486,18 @@ class Mailchimp implements Adapter
                     tags: array_map(
                         fn ($tag) => new TagInfo((string)$tag->id, $tag->name),
                         (array)($result->tags ?? [])
+                    ),
+                    consent: array_filter(
+                        array_map(
+                            fn ($field): ?ConsentField => $field->enabled ?
+                                new ConsentField(
+                                    id: Coercion::asString($field->marketing_permission_id),
+                                    description: Coercion::asString($field->text),
+                                ) :
+                                null,
+                            (array)($result->marketing_permissions ?? [])
+                        ),
+                        fn (?ConsentField $consent) => $consent !== null
                     )
                 );
             }
