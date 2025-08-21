@@ -11,12 +11,12 @@
     "require": {
         "php": "^8.4",
 
-        "decodelabs/coercion": "^0.3.3",
-        "decodelabs/exceptional": "^0.6.1",
-        "decodelabs/monarch": "^0.1.4",
-        "decodelabs/telegraph": "^0.4.15",
+        "decodelabs/coercion": "^0.3.5",
+        "decodelabs/exceptional": "^0.6.3",
+        "decodelabs/monarch": "^0.2.1",
+        "decodelabs/telegraph": "^0.5",
 
-        "mailchimp/marketing": "^3.0"
+        "mailchimp/marketing": "^3.0.80"
     },
     "require-dev": {
         "decodelabs/phpstan-decodelabs": "^0.7.0"
