@@ -13,6 +13,8 @@ This package provider a Mailchimp adapter for the Telegraph mailing list manager
 
 ## Installation
 
+This package requires PHP 8.4 or higher.
+
 Install via Composer:
 
 ```bash
