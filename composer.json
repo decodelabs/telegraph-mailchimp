@@ -21,7 +21,7 @@
         "mailchimp/marketing": "^3.0.80"
     },
     "require-dev": {
-        "decodelabs/chorus": "^0.1",
+        "decodelabs/chorus": ">0",
         "decodelabs/phpstan-decodelabs": "^0.7.0"
     },
     "autoload": {
